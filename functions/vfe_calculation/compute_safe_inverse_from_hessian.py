@@ -65,7 +65,7 @@ def compute(
         if torch.isfinite(cov).all():
             return cov
     except RuntimeError:
-        pass
+        cov = None
 
     # 3) SVD last resort
     H_cpu = torch.nan_to_num(H_cpu, nan=0.0, posinf=max_abs, neginf=-max_abs)
@@ -81,10 +81,3 @@ def compute(
     cov = cov_cpu.to(device=device, dtype=dtype)
     cov = 0.5 * (cov + cov.T)
     return cov if torch.isfinite(cov).all() else None
-
-
-# def compute(hessian, device, min_eigval=1e-6):
-#     eigvals, eigvecs = torch.linalg.eigh(hessian)
-#     eigvals_clipped = torch.clamp(eigvals, min=min_eigval)
-#     stable_hessian = eigvecs @ torch.diag(eigvals_clipped) @ eigvecs.T
-#     return torch.inverse(stable_hessian), eigvals, stable_hessian

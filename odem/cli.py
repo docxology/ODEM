@@ -25,18 +25,20 @@ def build_parser() -> ArgumentParser:
     run.add_argument("--max-combos", type=int, default=None, help="Limit combos for smoke runs.")
     run.add_argument("--seed", type=int, default=42, help="Global deterministic seed.")
     run.add_argument("--no-slurm", action="store_true", help="Ignore SLURM_ARRAY_TASK_* environment variables.")
-    run.add_argument("--no-static-plots", action="store_true", help="Skip PlotDispatcher static PDFs.")
+    run.add_argument("--no-static-plots", action="store_true", help="Skip static PDF plots.")
+    run.add_argument("--dashboard", action="store_true", help="Render compact dashboard PNG; enabled by default.")
     run.add_argument("--no-dashboard", action="store_true", help="Skip compact dashboard PNG.")
     run.add_argument("--animations", action="store_true", help="Generate state-estimation GIF animations.")
-    run.add_argument("--quiet-progress", action="store_true", help="Disable tqdm progress bars.")
+    run.add_argument("--allow-partial", action="store_true", help="Return partial results when one or more combinations fail.")
+    run.add_argument("--quiet-progress", "--no-progress", action="store_true", help="Disable tqdm progress bars.")
 
     validate = subparsers.add_parser("validate", help="Validate and count a YAML sweep.")
     validate.add_argument("--config", default="parameters.yaml", help="YAML configuration path.")
 
     summarize = subparsers.add_parser("summarize", help="Summarize a run bundle or sweep directory.")
     summarize.add_argument("path", help="Run bundle or sweep directory.")
-    summarize.add_argument("--json", dest="json_path", default=None, help="Write summary JSON.")
-    summarize.add_argument("--csv", dest="csv_path", default=None, help="Write sweep summary CSV.")
+    summarize.add_argument("--json", "--output-json", dest="json_path", default=None, help="Write summary JSON.")
+    summarize.add_argument("--csv", "--output-csv", dest="csv_path", default=None, help="Write sweep summary CSV.")
 
     plot = subparsers.add_parser("plot", help="Render visual artifacts from a run bundle.")
     plot.add_argument("run_dir", help="Run bundle directory.")
@@ -57,7 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command or "run"
 
     if command == "run":
-        result = _run(args)
+        try:
+            result = _run(args)
+        except RuntimeError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2))
+            return 1
         print(json.dumps({"completed": len(result["completed"]), "failed": len(result["failed"]), "log_dir": result["log_dir"]}, indent=2))
         return 0 if not result["failed"] else 1
     if command == "validate":
@@ -92,6 +98,7 @@ def _run(args: Namespace) -> dict:
         dashboard=not args.no_dashboard,
         animations=args.animations,
         tqdm_disable=args.quiet_progress,
+        allow_partial=args.allow_partial,
     )
     return ExperimentRunner(options).run()
 
@@ -142,6 +149,7 @@ def _report(args: Namespace) -> None:
                 "html": str(report.html_path),
                 "data": None if report.data_path is None else str(report.data_path),
                 "figure": None if report.figure_path is None else str(report.figure_path),
+                "gallery": None if report.gallery_path is None else str(report.gallery_path),
             },
             indent=2,
         )

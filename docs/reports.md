@@ -1,6 +1,8 @@
 # Reports
 
 Reports are derived artifacts built from run bundles and sweep summaries.
+`odem.summary_schema` defines the shared JSON/CSV/Markdown field names used by
+the reporting code and docs-contract tests.
 
 ## Run Reports
 
@@ -13,9 +15,12 @@ Outputs:
 - `reports/run_report.md`
 - `reports/run_report.html`
 - `reports/run_summary.json`
+- `reports/index.html`
 
-Run reports include free action, MSE, accuracy/complexity totals, finite-output
-status, final posterior values, model metadata, and manifest artifact entries.
+Run reports validate the source bundle before writing report files. They include
+free action, MSE, accuracy/complexity totals, finite-output status, bundle
+validation status, ranking eligibility, final posterior values, model metadata,
+and manifest artifact entries.
 
 ## Sweep Reports
 
@@ -30,10 +35,16 @@ Outputs:
 - `reports/sweep_summary.json`
 - `reports/sweep_summary.csv`
 - `reports/sweep_summary.png`
+- `reports/index.html`
 
-Sweep reports rank runs by free action and keep MSE visible as a second
-diagnostic. The PNG is intended as a quick scan of the frontier rather than a
-replacement for raw arrays or full statistical analysis.
+Sweep reports rank only runs with finite free-action values, valid manifests,
+and compatible state-estimate shapes. Invalid or diagnostic-only rows remain in
+the JSON/CSV/Markdown outputs with their validation issues, but they cannot be
+selected as the best run. The PNG is always written; when no rows are rankable,
+it contains a deterministic empty-state panel.
+Each report directory also includes a static no-dependency artifact gallery at
+`index.html` that links Markdown/HTML/JSON/CSV files and embeds available
+PNG/GIF visual artifacts.
 
 ## Programmatic API
 
@@ -45,3 +56,7 @@ sweep_paths = create_sweep_report("results")
 ```
 
 Both functions return paths to the generated artifacts.
+`ReportPaths.gallery_path` points to `index.html`, and `ReportPaths.assets`
+lists visual assets linked by the gallery.
+
+Report generation should use `odem.reporting`.

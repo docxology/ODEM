@@ -1,89 +1,25 @@
-import json
+import csv
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from odem.artifacts import RunBundle
-from odem.experiment import ExperimentRunner, RunnerOptions
+from odem.experiment import ExperimentRunner, RunnerOptions, resolve_combo_slice
 from odem.reporting import create_run_report, create_sweep_report
 from odem.visualization import render_sweep_summary
-
-
-def _write_two_combo_config(path: Path) -> Path:
-    path.write_text(
-        """
-priors:
-  theta:
-    E_theta: [30.0]
-    sigma_theta: [9.0]
-  lambda:
-    E_pi_x: [500.0]
-    sigma_lambda_x: [0.1]
-    E_pi_y: [10.0, 20.0]
-    sigma_lambda_y: [0.1]
-optimizer:
-  carry_cov: true
-  x:
-    name: ozaki
-    nu: [-4]
-    kappa_x: [1.0]
-  lambda:
-    adapt: true
-    eta:
-      rate: 0.0001
-      t_0: 10
-      gamma: 0.3
-    inter: 1
-    beta: [0.0]
-  theta:
-    adapt: true
-    eta:
-      rate: 0.0001
-      t_0: 10
-      gamma: 0.3
-    inter: [2]
-    beta: [0.0]
-  jitter: 1e-6
-gp:
-  noise:
-    x_wn_mu: 0.0
-    x_wn_sigma: [[0.05, 0.05, linear]]
-    x_cn_kernel_size: 51
-    x_cn_kernel_sigma: 0.005
-  name: glv
-  dt: 0.1
-  T: 0.3
-gm:
-  dynamics: lorenz
-  likelihood: identity
-  kx: 2
-  ky: 1
-  noise:
-    y_wn_mu: 0.0
-    y_wn_sigma: [[0.1, 0.1, linear]]
-    y_cn_kernel_size: 51
-    y_cn_kernel_sigma: 0.005
-""",
-        encoding="utf-8",
-    )
-    return path
+from tests.fixtures.bundles import write_complete_bundle
+from tests.fixtures.configs import write_two_combo_config
 
 
 def test_experiment_runner_logs_successes_and_failures(monkeypatch, tmp_path):
-    config_path = _write_two_combo_config(tmp_path / "config.yaml")
+    config_path = write_two_combo_config(tmp_path / "config.yaml")
     results_dir = tmp_path / "results"
     logs_dir = tmp_path / "logs"
 
     def fake_run_combo(combo, sweep, *, results_dir, static_plots, dashboard, animations, tqdm_disable):
         if combo.combo_index == 1:
             raise RuntimeError("deliberate combo failure")
-        bundle = RunBundle.create(results_dir, combo_index=combo.combo_index, run_id="fake-run")
-        bundle.save_array("vfe", np.array([1.0, 2.0]))
-        bundle.save_array("x_noisy", np.array([[0.0, 0.0], [1.0, 1.0]]))
-        bundle.save_array("gen_x_estimates", np.array([[[0.0, 0.0]], [[1.5, 1.0]]]))
-        bundle.save_json("snapshot", {"fa": 3.0, "mse": 0.0})
-        bundle.write_manifest(status="completed")
-        return bundle
+        return write_complete_bundle(results_dir, combo_index=combo.combo_index, run_id="fake-run")
 
     monkeypatch.setattr("odem.experiment.run_combo", fake_run_combo)
 
@@ -96,6 +32,7 @@ def test_experiment_runner_logs_successes_and_failures(monkeypatch, tmp_path):
             dashboard=False,
             animations=False,
             tqdm_disable=True,
+            allow_partial=True,
         )
     ).run()
 
@@ -107,13 +44,34 @@ def test_experiment_runner_logs_successes_and_failures(monkeypatch, tmp_path):
     assert next(logs_dir.glob("*/failed_combos.json")).exists()
 
 
+def test_experiment_runner_strict_mode_raises_after_logging_failures(monkeypatch, tmp_path):
+    config_path = write_two_combo_config(tmp_path / "config.yaml")
+    results_dir = tmp_path / "results"
+    logs_dir = tmp_path / "logs"
+
+    def fake_run_combo(combo, sweep, *, results_dir, static_plots, dashboard, animations, tqdm_disable):
+        raise RuntimeError(f"combo {combo.combo_index} failed")
+
+    monkeypatch.setattr("odem.experiment.run_combo", fake_run_combo)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        ExperimentRunner(
+            RunnerOptions(
+                config_path=config_path,
+                results_dir=results_dir,
+                logs_dir=logs_dir,
+                static_plots=False,
+                dashboard=False,
+                animations=False,
+                tqdm_disable=True,
+            )
+        ).run()
+
+    assert next(logs_dir.glob("*/failed_combos.json")).exists()
+
+
 def test_reporting_creates_run_and_sweep_markdown_and_html(tmp_path):
-    bundle = RunBundle.create(tmp_path / "results", combo_index=0, run_id="report-run")
-    bundle.save_array("vfe", np.array([2.0, 1.0]))
-    bundle.save_array("x_noisy", np.array([[1.0, 2.0], [2.0, 3.0]]))
-    bundle.save_array("gen_x_estimates", np.array([[[1.0, 2.0]], [[2.5, 2.5]]]))
-    bundle.save_json("snapshot", {"fa": 3.0, "mse": 0.0, "gm": {"dynamics": "lorenz"}, "gp": {"name": "glv"}})
-    bundle.write_manifest(status="completed")
+    bundle = write_complete_bundle(tmp_path / "results", run_id="report-run", vfe=np.array([2.0, 1.0]))
 
     run_report = create_run_report(bundle.path)
     sweep_report = create_sweep_report(tmp_path / "results")
@@ -123,6 +81,12 @@ def test_reporting_creates_run_and_sweep_markdown_and_html(tmp_path):
     assert "Free action" in run_report.markdown_path.read_text(encoding="utf-8")
     assert sweep_report.markdown_path.exists()
     assert "report-run" in sweep_report.markdown_path.read_text(encoding="utf-8")
+    assert sweep_report.figure_path is not None
+    assert sweep_report.figure_path.exists()
+    csv_rows = list(csv.DictReader((sweep_report.markdown_path.parent / "sweep_summary.csv").open(encoding="utf-8")))
+    assert csv_rows[0]["valid_bundle"] == "True"
+    assert csv_rows[0]["valid_for_ranking"] == "True"
+    assert csv_rows[0]["issues"] == "[]"
 
 
 def test_render_sweep_summary_plot_uses_summary_rows(tmp_path):
@@ -136,3 +100,28 @@ def test_render_sweep_summary_plot_uses_summary_rows(tmp_path):
 
     assert output.exists()
     assert output.suffix == ".png"
+
+
+def test_render_sweep_summary_plot_writes_empty_state_for_no_valid_rows(tmp_path):
+    output = render_sweep_summary([], tmp_path / "sweep_summary.png")
+
+    assert output.exists()
+    assert output.suffix == ".png"
+
+
+def test_resolve_combo_slice_rejects_negative_max_combos():
+    with pytest.raises(ValueError, match="max_combos"):
+        resolve_combo_slice(10, max_combos=-1)
+
+
+def test_resolve_combo_slice_rejects_empty_explicit_slice():
+    with pytest.raises(ValueError, match="empty"):
+        resolve_combo_slice(10, start_index=3, end_index=3)
+
+
+def test_resolve_combo_slice_normalizes_one_based_slurm_array(monkeypatch):
+    monkeypatch.setenv("SLURM_ARRAY_TASK_MIN", "1")
+    monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "1")
+    monkeypatch.setenv("SLURM_ARRAY_TASK_COUNT", "3")
+
+    assert resolve_combo_slice(10) == (0, 4)

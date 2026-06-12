@@ -9,7 +9,7 @@ python main.py run --config parameters.yaml
 For a quick smoke run:
 
 ```bash
-python main.py run --config configs/smoke.yaml --quiet-progress --no-static-plots
+python main.py run --config configs/smoke.yaml --no-progress --no-static-plots
 ```
 
 For a local slice:
@@ -52,6 +52,8 @@ options = RunnerOptions(
 result = ExperimentRunner(options).run()
 ```
 
-The runner catches per-combo failures, logs tracebacks, and continues the sweep.
-This is important for large sweeps where one unstable parameter setting should
-not destroy all completed work.
+The runner catches per-combo failures and logs tracebacks. Strict mode is the
+default: if any combo fails, `ExperimentRunner.run()` raises after writing the
+log bundle, and the CLI exits nonzero. Use `--allow-partial` or
+`RunnerOptions(allow_partial=True)` only when partial sweep outputs are
+intentionally acceptable for a larger exploratory sweep.

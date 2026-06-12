@@ -2,11 +2,11 @@ import torch
 import torch.autograd.functional as F
 from functions.vfe_calculation import (compute_e_y, compute_e_x, compute_e_theta,
                                        compute_e_lambda,compute_generalised_precision, compute_safe_inverse_from_hessian)
+from odem.numerics import quadratic_form
 
 
 def _quadratic_form(vector, matrix):
-    flat = vector.reshape(-1)
-    return torch.dot(flat, matrix @ flat)
+    return quadratic_form(vector, matrix)
 
 
 def compute_joint(gen_mu, gen_y, g, f, q_theta_mu, p_theta_eta,
@@ -49,6 +49,8 @@ def compute(q_x_mu, gen_y, g, f, q_theta_mu, p_theta_eta, p_theta_pi, p_lambda_x
             y_h_value, y_lambda_value,
             x_h_value, x_lambda_value,
             key, initial_jitter, device):
+    if key not in {"x", "theta", "lambda", "all"}:
+        raise ValueError("key must be one of: x, theta, lambda, all")
     gen_mu_cov, q_theta_cov, q_lambda_x_cov, q_lambda_y_cov = None,None,None,None
     if key in ['x', 'all']:
         # Flatten gen_mu

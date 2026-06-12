@@ -3,12 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import importlib
 import json
-import os
 import traceback
-
-import numpy as np
 
 from algorithms import ODEM
 from functions import make_json_safe
@@ -17,38 +13,10 @@ from functions.saving import serializable
 from odem.analysis import summarize_run, write_summary_json
 from odem.artifacts import RunBundle
 from odem.config import ExperimentCombo, ParameterSweep, load_sweep
+from odem.model_registry import resolve_model_functions
+from odem.run_outputs import OUTPUT_NAMES, RAW_OUTPUT_NAMES, RunOutputs
+from odem.slicing import resolve_combo_slice
 from odem.visualization import create_state_animation, dispatch_static_plots, render_diagnostic_dashboard
-
-
-OUTPUT_NAMES = (
-    "vfe",
-    "accuracy",
-    "complexity",
-    "gen_sensations",
-    "gen_predictions",
-    "x_clean",
-    "x_noisy",
-    "y",
-    "gen_x_estimates",
-    "theta",
-    "lambda_x",
-    "lambda_y",
-    "cov_lambda_x",
-    "cov_lambda_y",
-    "cov_theta",
-    "y_white_noise",
-    "y_sigma_schedule",
-    "y_colored_noise",
-    "y_context_lengths",
-    "x_white_noise",
-    "x_sigma_schedule",
-    "x_colored_noise",
-    "x_context_lengths",
-    "prior_theta_eta",
-    "prior_theta_pi",
-    "free_action",
-    "mse",
-)
 
 
 @dataclass(frozen=True)
@@ -65,6 +33,7 @@ class RunnerOptions:
     dashboard: bool = True
     animations: bool = False
     tqdm_disable: bool = False
+    allow_partial: bool = False
 
 
 class ExperimentRunner:
@@ -97,12 +66,12 @@ class ExperimentRunner:
                     animations=self.options.animations,
                     tqdm_disable=self.options.tqdm_disable,
                 )
-                completed.append(make_json_safe.convert(combo.to_legacy_tuple()))
+                completed.append(make_json_safe.convert(combo.to_parameter_tuple()))
                 summaries.append(summarize_run(bundle.path))
             except Exception as exc:  # keep sweep jobs moving while preserving details
                 failed.append(
                     {
-                        "combo": make_json_safe.convert(combo.to_legacy_tuple()),
+                        "combo": make_json_safe.convert(combo.to_parameter_tuple()),
                         "combo_idx": combo.combo_index,
                         "error": str(exc),
                         "traceback": traceback.format_exc(),
@@ -118,12 +87,15 @@ class ExperimentRunner:
         if summaries:
             write_summary_json(summaries, self.options.results_dir / "summary.json")
 
-        return {
+        result = {
             "completed": completed,
             "failed": failed,
             "summaries": summaries,
             "log_dir": str(log_bundle.path),
         }
+        if failed and not self.options.allow_partial:
+            raise RuntimeError(f"{len(failed)} ODEM combination(s) failed; details written to {log_bundle.path}")
+        return result
 
 
 def run_combo(
@@ -136,16 +108,17 @@ def run_combo(
     animations: bool,
     tqdm_disable: bool,
 ) -> RunBundle:
-    dynamics = importlib.import_module("functions.generative_model.dynamics")
-    likelihood = importlib.import_module("functions.generative_model.likelihood")
-    f = getattr(dynamics, combo.f_name)
-    g = getattr(likelihood, combo.g_name)
+    resolved = resolve_model_functions(
+        generative_process=combo.gp_name,
+        dynamics=combo.f_name,
+        likelihood=combo.g_name,
+    )
 
-    outputs = ODEM.start(
+    raw_outputs = ODEM.start(
         combo.kx,
         combo.ky,
-        f,
-        g,
+        resolved.dynamics,
+        resolved.likelihood,
         combo.f_name,
         combo.gp_name,
         combo.dt,
@@ -175,23 +148,24 @@ def run_combo(
         combo.device,
         tqdm_disable=tqdm_disable,
     )
-    output = dict(zip(OUTPUT_NAMES, outputs, strict=True))
+    outputs = RunOutputs.from_tuple(tuple(raw_outputs))
 
-    free_action = float(output["free_action"].detach() if hasattr(output["free_action"], "detach") else output["free_action"])
-    mse = float(output["mse"])
-    run_id = f"C{combo.combo_index}_{free_action:.2f}_{mse:.4f}"
-    bundle = RunBundle.create(results_dir, combo_index=combo.combo_index, run_id=_unique_run_id(results_dir, run_id))
-    bundle.save_json("combo", make_json_safe.convert(combo.to_legacy_tuple()))
+    run_id = f"C{combo.combo_index}_{outputs.free_action:.2f}_{outputs.mse:.4f}"
+    bundle = RunBundle.create(
+        results_dir,
+        combo_index=combo.combo_index,
+        run_id=_unique_run_id(results_dir, run_id),
+        metadata={"requested_outputs": {"static_plots": static_plots, "dashboard": dashboard, "animations": animations}},
+    )
+    bundle.save_json("combo", make_json_safe.convert(combo.to_parameter_tuple()))
 
-    for name in OUTPUT_NAMES[:-2]:
-        bundle.save_array(name, output[name])
+    for name in RAW_OUTPUT_NAMES:
+        bundle.save_array(name, outputs.raw_arrays[name])
 
-    y_sigma_schedule = np.asarray(output["y_sigma_schedule"])
-    x_sigma_schedule = np.asarray(output["x_sigma_schedule"])
-    bundle.save_array("y_pi_schedule", 1 / (y_sigma_schedule**2))
-    bundle.save_array("x_pi_schedule", 1 / (x_sigma_schedule**2))
+    for name, value in outputs.derived_arrays.items():
+        bundle.save_array(name, value)
 
-    snapshot = build_snapshot(combo, sweep.noise, output)
+    snapshot = build_snapshot(combo, sweep.noise, {**outputs.raw_arrays, **outputs.snapshot_scalars})
     bundle.save_json("snapshot", snapshot)
 
     if static_plots:
@@ -202,13 +176,13 @@ def run_combo(
     if animations:
         bundle.record_file(create_state_animation(bundle.path), kind="animation")
 
+    bundle.write_manifest(status="completed")
     bundle.write_manifest(status="completed", extra={"summary": summarize_run(bundle.path)})
     return bundle
 
 
 def build_snapshot(combo: ExperimentCombo, noise: dict[str, dict[str, Any]], output: dict[str, Any]) -> dict[str, Any]:
-    free_action = output["free_action"]
-    free_action_value = float(free_action.detach() if hasattr(free_action, "detach") else free_action)
+    free_action_value = float(output["fa"])
     snapshot = {
         "device": combo.device,
         "algorithm_name": combo.algorithm_name,
@@ -277,32 +251,6 @@ def build_snapshot(combo: ExperimentCombo, noise: dict[str, dict[str, Any]], out
         "mse": float(output["mse"]),
     }
     return {k: serializable.serialize(v) for k, v in snapshot.items()}
-
-
-def resolve_combo_slice(
-    total: int,
-    *,
-    start_index: int | None = None,
-    end_index: int | None = None,
-    max_combos: int | None = None,
-    use_slurm_env: bool = True,
-) -> tuple[int, int]:
-    if start_index is None and end_index is None and use_slurm_env and "SLURM_ARRAY_TASK_ID" in os.environ:
-        task_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
-        task_count = int(os.environ.get("SLURM_ARRAY_TASK_COUNT", "1"))
-        splits = np.array_split(np.arange(total), task_count)
-        if task_id >= len(splits) or len(splits[task_id]) == 0:
-            return 0, 0
-        start, end = int(splits[task_id][0]), int(splits[task_id][-1]) + 1
-    else:
-        start = 0 if start_index is None else int(start_index)
-        end = total if end_index is None else int(end_index)
-
-    start = max(0, min(start, total))
-    end = max(start, min(end, total))
-    if max_combos is not None:
-        end = min(end, start + int(max_combos))
-    return start, end
 
 
 def _unique_run_id(results_dir: str | Path, run_id: str) -> str:

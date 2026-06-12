@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run unit and contract tests
+        run: pytest -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Check diff whitespace
+        run: git diff --check
+
+      - name: Validate main sweep
+        run: python main.py validate --config parameters.yaml
+
+      - name: Validate smoke sweep
+        run: python main.py validate --config configs/smoke.yaml
+
+      - name: Run smoke workflow
+        run: |
+          rm -rf /tmp/odem-smoke /tmp/odem-wheel
+          python main.py run --config configs/smoke.yaml --results-dir /tmp/odem-smoke/results --logs-dir /tmp/odem-smoke/logs --max-combos 1 --no-static-plots --dashboard --animations --no-progress
+          python main.py summarize /tmp/odem-smoke/results --output-json /tmp/odem-smoke/summary.json --output-csv /tmp/odem-smoke/summary.csv
+          python main.py report /tmp/odem-smoke/results --output-dir /tmp/odem-smoke/reports
+          RUN_DIR="$(find /tmp/odem-smoke/results -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          python scripts/benchmark_visuals.py --run-dir "$RUN_DIR" --output-json /tmp/odem-smoke/visual_benchmark.json --max-dashboard-seconds 20 --max-animation-seconds 30 --fps 4
+          python scripts/archive_release_evidence.py --results-dir /tmp/odem-smoke/results --output-dir /tmp/odem-smoke/release --expected-combos 1
+          python scripts/verify_release_evidence.py --release-dir /tmp/odem-smoke/release --expected-combos 1
+
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps -w /tmp/odem-wheel

@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
-import importlib
 import itertools
 
 from ruamel.yaml import YAML
 import torch
+
+from odem.model_registry import validate_model_names
 
 
 SCHEDULE_MODES = {"linear", "exp", "sigmoid", "log", "gaussian"}
@@ -48,7 +49,7 @@ class ExperimentCombo:
     algorithm_name: str = "ODEM"
     device: str = "cpu"
 
-    def to_legacy_tuple(self) -> tuple[Any, ...]:
+    def to_parameter_tuple(self) -> tuple[Any, ...]:
         return (
             self.kx,
             self.ky,
@@ -96,7 +97,7 @@ class ParameterSweep:
     def combination_count(self) -> int:
         return len(self.combos)
 
-    def to_legacy_parameters(self) -> list[Any]:
+    def to_parameter_axes(self) -> list[Any]:
         return [list(axis) if len(axis) != 1 else axis[0] for axis in self.axes]
 
 
@@ -177,20 +178,20 @@ def _build_axes(params: dict[str, Any]) -> tuple[tuple[Any, ...], ...]:
         tensor_axis(priors["lambda"]["E_pi_y"]),
         tensor_axis(priors["lambda"]["sigma_lambda_y"]),
         nu_axis,
-        tuple(float(v) for v in _as_axis(opt["x"]["kappa_x"])),
-        (bool(opt["lambda"]["adapt"]),),
+        tuple(float(v) for v in _as_axis(opt["x"]["kappa_x"], name="kappa_x")),
+        (_as_bool(opt["lambda"]["adapt"], name="optimizer.lambda.adapt"),),
         (float(opt["lambda"]["eta"]["rate"]),),
         (float(opt["lambda"]["eta"]["t_0"]),),
         (float(opt["lambda"]["eta"]["gamma"]),),
         (int(opt["lambda"]["inter"]),),
-        tuple(float(v) for v in _as_axis(opt["lambda"]["beta"])),
-        (bool(opt["theta"]["adapt"]),),
+        tuple(float(v) for v in _as_axis(opt["lambda"]["beta"], name="optimizer.lambda.beta")),
+        (_as_bool(opt["theta"]["adapt"], name="optimizer.theta.adapt"),),
         (float(opt["theta"]["eta"]["rate"]),),
         (float(opt["theta"]["eta"]["t_0"]),),
         (float(opt["theta"]["eta"]["gamma"]),),
-        tuple(int(v) for v in _as_axis(opt["theta"]["inter"])),
-        tuple(float(v) for v in _as_axis(opt["theta"]["beta"])),
-        (bool(opt["carry_cov"]),),
+        tuple(int(v) for v in _as_axis(opt["theta"]["inter"], name="optimizer.theta.inter")),
+        tuple(float(v) for v in _as_axis(opt["theta"]["beta"], name="optimizer.theta.beta")),
+        (_as_bool(opt["carry_cov"], name="optimizer.carry_cov"),),
         (float(opt["jitter"]),),
         ("ODEM",),
         ("cpu",),
@@ -245,21 +246,11 @@ def _validate_top_level(params: dict[str, Any]) -> None:
 
 
 def _validate_model_modules(params: dict[str, Any]) -> None:
-    gp_name = str(params["gp"]["name"])
-    f_name = str(params["gm"]["dynamics"])
-    g_name = str(params["gm"]["likelihood"])
-
-    try:
-        importlib.import_module(f"functions.generative_process.{gp_name.split('/')[0]}")
-    except ModuleNotFoundError as exc:
-        raise ValueError(f"Unknown generative process: {gp_name}") from exc
-
-    dynamics = importlib.import_module("functions.generative_model.dynamics")
-    likelihood = importlib.import_module("functions.generative_model.likelihood")
-    if not hasattr(dynamics, f_name):
-        raise ValueError(f"Unknown dynamics function: {f_name}")
-    if not hasattr(likelihood, g_name):
-        raise ValueError(f"Unknown likelihood function: {g_name}")
+    validate_model_names(
+        generative_process=str(params["gp"]["name"]),
+        dynamics=str(params["gm"]["dynamics"]),
+        likelihood=str(params["gm"]["likelihood"]),
+    )
 
 
 def _validate_noise(label: str, noise: dict[str, Any], prefix: str) -> None:
@@ -277,20 +268,28 @@ def _validate_noise(label: str, noise: dict[str, Any], prefix: str) -> None:
         if len(context) != 3:
             raise ValueError(f"{label} white-noise schedule entries must be [start, end, mode]")
         start, end, mode = context
-        if float(start) < 0 or float(end) < 0:
-            raise ValueError(f"{label} white-noise sigma values must be non-negative")
+        if float(start) <= 0 or float(end) <= 0:
+            raise ValueError(f"{label} white-noise sigma values must be positive")
         if str(mode) not in SCHEDULE_MODES:
             raise ValueError(f"Unknown {label} noise schedule mode: {mode}")
 
 
 def _validate_positive_axis(name: str, values: Any) -> None:
-    for value in _as_axis(values):
+    for value in _as_axis(values, name=name):
         tensor = torch.as_tensor(value, dtype=torch.float64)
         if torch.any(tensor <= 0):
             raise ValueError(f"{name} values must be positive")
 
 
-def _as_axis(value: Any) -> tuple[Any, ...]:
+def _as_axis(value: Any, *, name: str = "axis") -> tuple[Any, ...]:
     if isinstance(value, list):
+        if not value:
+            raise ValueError(f"{name} axis must be non-empty")
         return tuple(value)
     return (value,)
+
+
+def _as_bool(value: Any, *, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{name} must be a boolean")

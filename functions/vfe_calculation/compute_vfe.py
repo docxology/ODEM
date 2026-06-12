@@ -1,10 +1,10 @@
 import torch
 from functions.vfe_calculation import compute_e_x,compute_e_y, compute_e_theta, compute_e_lambda, compute_log_det
+from odem.numerics import quadratic_form
 
 
 def _quadratic_form(vector, matrix):
-    flat = vector.reshape(-1)
-    return torch.dot(flat, matrix @ flat)
+    return quadratic_form(vector, matrix)
 
 def compute(gen_mu, gen_y, f, g, q_theta_mu, p_theta_eta, q_lambda_x_mu, p_lambda_x_eta,
             q_lambda_y_mu, p_lambda_y_eta, gen_pi_y, gen_pi_x, p_theta_pi, gen_mu_cov,

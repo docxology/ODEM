@@ -5,8 +5,8 @@ import numpy as np
 import torch
 
 from functions import lambda_to_precision, precision_to_lambda
-from functions.noise_generation.generate_colored_noise import gaussian_kernel
 from functions.initialisation import initialise_sequential
+from functions.noise_generation.generate_colored_noise import gaussian_kernel
 from odem.config import load_sweep
 from odem.experiment import resolve_combo_slice
 
@@ -30,16 +30,16 @@ def test_gaussian_kernel_degenerate_sigma_falls_back_to_delta():
     assert kernel[2] == 1.0
 
 
-def test_default_parameter_yaml_loads_same_legacy_combo_count():
+def test_default_parameter_yaml_loads_same_combo_count():
     sweep = load_sweep("parameters.yaml")
-    legacy_parameters, noise = initialise_sequential.set("parameters.yaml")
+    parameter_axes, noise = initialise_sequential.set("parameters.yaml")
 
-    legacy_count = 1
-    for value in legacy_parameters:
-        legacy_count *= len(value) if isinstance(value, list) else 1
+    axis_count = 1
+    for value in parameter_axes:
+        axis_count *= len(value) if isinstance(value, list) else 1
 
     assert sweep.combination_count == 3024
-    assert legacy_count == sweep.combination_count
+    assert axis_count == sweep.combination_count
     assert noise["y"]["y_cn_kernel_size"] == 51
 
 

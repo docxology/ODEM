@@ -1,10 +1,10 @@
 import ast
-import subprocess
-import sys
 
 import numpy as np
+import pytest
 
-from odem.visualization import create_state_animation, render_diagnostic_dashboard
+from odem.visualization import create_state_animation, render_diagnostic_dashboard, render_sweep_summary
+from tests.fixtures.cli import run_cli
 
 
 def test_main_is_import_safe_entrypoint():
@@ -14,12 +14,7 @@ def test_main_is_import_safe_entrypoint():
 
 
 def test_cli_help_is_available_without_running_experiments():
-    completed = subprocess.run(
-        [sys.executable, "-m", "odem.cli", "--help"],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    completed = run_cli("-m", "odem.cli", "--help")
 
     assert completed.returncode == 0
     assert "run" in completed.stdout
@@ -45,3 +40,26 @@ def test_visualization_helpers_create_dashboard_and_animation(tmp_path):
     assert dashboard.suffix == ".png"
     assert animation.exists()
     assert animation.suffix == ".gif"
+
+
+def test_dashboard_and_animation_reject_empty_or_bad_rank_state_arrays(tmp_path):
+    result_dir = tmp_path / "run"
+    result_dir.mkdir()
+    np.save(result_dir / "x_noisy.npy", np.empty((0, 2)))
+    np.save(result_dir / "gen_x_estimates.npy", np.empty((0, 2)))
+
+    with pytest.raises(ValueError, match="gen_x_estimates"):
+        render_diagnostic_dashboard(result_dir)
+    with pytest.raises(ValueError, match="gen_x_estimates"):
+        create_state_animation(result_dir)
+
+
+def test_render_sweep_summary_filters_nonfinite_rows(tmp_path):
+    rows = [
+        {"run_id": "bad", "free_action": np.inf, "mse": 1.0, "valid_for_ranking": False},
+        {"run_id": "good", "free_action": 1.0, "mse": 0.1, "valid_for_ranking": True},
+    ]
+
+    output = render_sweep_summary(rows, tmp_path / "sweep_summary.png")
+
+    assert output.exists()
