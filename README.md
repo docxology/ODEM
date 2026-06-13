@@ -1,150 +1,121 @@
-# Online Generalised Predictive Coding through Online Dynamic Expectation Maximisation (ODEM)
+# Online Generalised Predictive Coding through ODEM
 
-A Python/PyTorch implementation of **Online Dynamic Expectation Maximisation (ODEM)** for **Online Generalised Predictive Coding** under the **Free Energy Principle (FEP)**.
+A Python/PyTorch implementation of **Online Dynamic Expectation Maximisation
+(ODEM)** for **Online Generalised Predictive Coding** under the **Free Energy
+Principle (FEP)**.
 
-ODEM extends Dynamic Expectation Maximisation (DEM) to online data assimilation through a separation of temporal scales, enabling the joint inference of:
+ODEM performs online data assimilation through separated temporal scales,
+jointly estimating:
 
-- Hidden dynamic states  
-- Unknown model parameters  
-- State and observation uncertainty (precision estimation)
+- hidden dynamic states,
+- unknown model parameters,
+- state and observation uncertainty through precision learning.
 
-This repository implements neuronal message passing in a one-layer Predictive Coding (PC) network using Python and PyTorch on CPU.
-
----
+The repository now exposes both the original `python main.py` entrypoint and a
+modular `odem` package for validated configuration, reproducible run bundles,
+analytics, static visualizations, and optional animations.
 
 <p align="center">
   <img src="example/lorenz-GM-kx=3.png" alt="Lorenz GM kx=3" width="700"/>
   <br>
   <em>
-  Figure 1: State estimation using a Lorenz generative model versus a Generalised Lotka–Volterra generative process (i.e., under model mismatch) using ODEM with three orders of generalised coordinates of motion. Despite structural mismatch between the generative model and process, the inferred trajectory closely tracks the true latent dynamics.
+  Figure 1: State estimation using a Lorenz generative model against a
+  Generalised Lotka-Volterra generative process under model mismatch.
   </em>
 </p>
 
----
+## Quick Start
 
-# Features
+Use Python 3.11-3.13.
 
-- Online variational inference using ODEM
-- Predictive Coding under the Free Energy Principle
-- Joint state, parameter, and precision estimation (triple estimation)
-- Support for nonlinear and potentially chaotic dynamical systems
-- Generalised coordinates of motion
-- Implemented using PyTorch
-- Configurable experiments via YAML files
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 
----
+python main.py validate --config parameters.yaml
+python main.py run --config configs/smoke.yaml --no-progress --no-static-plots
+python main.py summarize results --output-json results/summary.json
+pytest -q
+```
 
-# Repository Structure
+The default `parameters.yaml` expands to a larger sweep. Use
+`configs/smoke.yaml` for quick local verification, and use `--max-combos`,
+`--start-index`, and `--end-index` for segmented execution.
+
+## Features
+
+- Validated YAML parameter sweeps via `odem.config`.
+- `python main.py` CLI entrypoint.
+- Shared raw-array loading and state-estimate shape contracts via
+  `odem.arrays`.
+- Central run-output schema and precision-schedule derivation via
+  `odem.run_outputs`.
+- Validated model lookup via `odem.model_registry` and shared numerical guards
+  via `odem.numerics`.
+- Validated manifest-backed run bundles with raw `.npy` arrays, JSON metadata,
+  checksums, static plots, compact dashboards, and optional GIF animations.
+- Dedicated `odem.validation` checks for completed bundle status, required
+  artifacts, byte counts, SHA-256 hashes, array-shape contracts, recorded
+  visual artifact integrity, and nonfinite numeric warnings.
+- Shared visualization helpers for multi-panel diagnostic dashboards, sweep
+  summary figures, state-estimation GIFs, and PNG/GIF/PDF integrity checks.
+- Sweep summarization and Markdown/HTML reports ordered by free action with
+  finite-output and bundle-validation checks, using the shared
+  `odem.summary_schema` field contract.
+- Static HTML artifact galleries that link report data, PNG/PDF assets, and GIF
+  animations without adding runtime dependencies.
+- Local release evidence archiving and verification via `odem.release_evidence`.
+- SLURM array compatibility plus explicit local index slicing through
+  `odem.slicing`.
+- CI workflow coverage for Python 3.11, 3.12, and 3.13.
+- Scripted visual runtime benchmarks plus local release-evidence archive and
+  verification workflows.
+- Focused pytest suite covering configuration, artifacts, analysis,
+  visualization, numerical transforms, and source/module contracts.
+
+## Repository Structure
 
 ```text
 ODEM/
-│
-├── algorithms/          # Core ODEM implementation
-├── example/             # Example figures and outputs
-├── parameters.yaml      # Main configuration file
-├── main.py              # Entry point
-├── requirements.txt     # Required Python packages
-└── README.md
+├── algorithms/          # Core D/E/M and ODEM numerical loop
+├── functions/           # Generative models, VFE, noise, plotting utilities
+├── odem/                # Public package: config, outputs, slicing, artifacts, analysis, reports, CLI
+├── docs/                # Modular reference and workflow documentation
+├── scripts/             # Benchmark and release-evidence utilities
+├── tests/               # Deterministic unit and smoke tests
+├── example/             # Example rendered figure
+├── parameters.yaml      # Main experiment sweep
+├── main.py              # CLI entrypoint
+└── pyproject.toml       # Package and test metadata
 ```
 
----
+## Documentation
 
-# Installation
+Start with [docs/index.md](docs/index.md), then use the module that matches the
+task:
 
-## 1. Clone the repository
+- [Architecture](docs/architecture.md)
+- [Maintainer Guide](docs/maintainer-guide.md)
+- [Validation Contract](docs/validation-contract.md)
+- [Release Evidence](docs/release-evidence.md)
+- [CI and Benchmarks](docs/ci-and-benchmarks.md)
+- [Test Strategy](docs/test-strategy.md)
+- [Configuration](docs/configuration.md)
+- [Running Experiments](docs/running-experiments.md)
+- [Artifacts and Data](docs/artifacts-and-data.md)
+- [Visualization and Animation](docs/visualization-and-animation.md)
+- [Analysis](docs/analysis.md)
+- [Reports](docs/reports.md)
+- [Testing](docs/testing.md)
+- [Reproducibility and Parallelism](docs/reproducibility-and-parallelism.md)
+- [API Reference](docs/api-reference.md)
+- [Scoped TODO](TODO.md)
+- [Agent Instructions](AGENTS.md)
 
-Choose a directory where you would like to clone the repository:
+## Citation
 
-```bash
-cd MY_DIRECTORY
-```
-
-Clone the repository:
-
-```bash
-git clone https://github.com/MLDawn/ODEM.git
-```
-
-Go into the cloned repository:
-
-```bash
-cd ODEM
-```
-
----
-
-## 2. Create a Conda environment
-
-Create a new Conda environment with Python 3.11.5:
-
-```bash
-conda create -n ENVIRONMENT_NAME python=3.11.5
-```
-
-Activate the environment:
-
-```bash
-conda activate ENVIRONMENT_NAME
-```
-
----
-
-## 3. Install required packages
-
-Install all required dependencies using the provided `requirements.txt` file:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-# Running the Code
-
-## 1. Configure the experiment
-
-Open the `parameters.yaml` file and modify the configuration parameters as desired.
-
----
-
-## 2. Open the project in your IDE
-
-For example:
-
-- PyCharm
-- VSCode
-
-Assign your Conda environment (`ENVIRONMENT_NAME`) as the Python interpreter.
-
----
-
-## 3. Run the main script
-
-Execute:
-
-```bash
-python main.py
-```
-
----
-
-# Example Experiments
-
-The repository includes experiments involving nonlinear dynamical systems such as:
-
-- Lorenz systems
-- Generalised Lotka–Volterra systems
-
-The framework supports both:
-
-- Matched generative model and process settings
-- Model mismatch scenarios
-
----
-
-# Citation
-
-If you use this codebase in your research, please cite:
+If you use this codebase in research, cite:
 
 ```bibtex
 @article{bazargani2026online,
@@ -155,14 +126,6 @@ If you use this codebase in your research, please cite:
 }
 ```
 
-# License
+## License
 
-Please refer to the repository license for usage conditions.
-
----
-
-# Contact
-
-For questions, collaborations, or issues related to the repository, please open an issue on GitHub.
-
-GitHub Repository: [ODEM Repository](https://github.com/MLDawn/ODEM)
+See [LICENSE](LICENSE).

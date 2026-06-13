@@ -1,74 +1,108 @@
-import numpy as np
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-
-# Define grid in precision space
-E_vals = np.linspace(0.1, 10, 200)
-Var_vals = np.linspace(0.01, 100, 200)
-E_grid, Var_grid = np.meshgrid(E_vals, Var_vals)
-
-# Inverse mapping to log-normal parameters
-Pi_grid = 1 / np.log(1 + Var_grid / E_grid**2)
-Eta_grid = np.log(E_grid) - 0.5 * np.log(1 + Var_grid / E_grid**2)
-std_log_space = np.sqrt(1 / Pi_grid)
-
-# Define candidate contour levels and styles
-levels_eta = [-4, -2, 0, 2, 4]
-levels_pi = [0.1, 0.5, 1.0, 2.0, 5.0]
-levels_std = [0.5, 1.0, 2.0, 4.0, 8.0]
-colors = ['cyan', 'lime', 'yellow', 'orange', 'white']
-linestyles = ['-', '--', ':', '-.', '-']
-
-# Filter only valid levels within surface range
-valid_levels_eta = [lvl for lvl in levels_eta if Eta_grid.min() <= lvl <= Eta_grid.max()]
-valid_levels_pi = [lvl for lvl in levels_pi if Pi_grid.min() <= lvl <= Pi_grid.max()]
-valid_levels_std = [lvl for lvl in levels_std if std_log_space.min() <= lvl <= std_log_space.max()]
-
-# Plot 1: η (log-mean)
-plt.figure(figsize=(10, 6))
-cf1 = plt.contourf(E_grid, Var_grid, Eta_grid, levels=100, cmap='viridis')
-legend_lines = []
-for level, color, ls in zip(valid_levels_eta, colors, linestyles):
-    c = plt.contour(E_grid, Var_grid, Eta_grid, levels=[level], colors=color, linestyles=ls, linewidths=2)
-    legend_lines.append(Line2D([0], [0], color=color, linestyle=ls, linewidth=2, label=f'$\eta$ = {level}'))
-plt.legend(handles=legend_lines, loc='upper left', fontsize=10)
-plt.colorbar(cf1, label='$\eta_\Lambda$')
-plt.title('Mapping from Precision Space to $\eta_\Lambda$')
-plt.xlabel('E[$\Pi$] (Expected Precision)')
-plt.ylabel('Var[$\Pi$] (Precision Variance)')
-plt.grid(True)
-plt.savefig('lambda_eta.pdf', bbox_inches='tight', pad_inches=0)
+import numpy as np
 
 
-# Plot 2: Π (log-precision)
-plt.figure(figsize=(10, 6))
-cf2 = plt.contourf(E_grid, Var_grid, Pi_grid, levels=100, cmap='plasma')
-legend_lines = []
-for level, color, ls in zip(valid_levels_pi, colors, linestyles):
-    c = plt.contour(E_grid, Var_grid, Pi_grid, levels=[level], colors=color, linestyles=ls, linewidths=2)
-    legend_lines.append(Line2D([0], [0], color=color, linestyle=ls, linewidth=2, label=f'$Pi_\Lambda$ = {level}'))
-plt.legend(handles=legend_lines, loc='upper left', fontsize=10)
-plt.colorbar(cf2, label='Π (log-precision)')
-plt.title('Mapping from Precision Space to Π in Log-Normal Space')
-plt.xlabel('E[$\Pi$] (Expected Precision)')
-plt.ylabel('Var[$\Pi$] (Precision Variance)')
-plt.grid(True)
-plt.savefig('lambda_precision.pdf', bbox_inches='tight', pad_inches=0)
+def compute_precision_to_log_grid(
+    expected_precision_range=(0.1, 10.0),
+    precision_variance_range=(0.01, 100.0),
+    points=200,
+):
+    E_vals = np.linspace(*expected_precision_range, points)
+    Var_vals = np.linspace(*precision_variance_range, points)
+    E_grid, Var_grid = np.meshgrid(E_vals, Var_vals)
+    pi_grid = 1 / np.log(1 + Var_grid / E_grid**2)
+    eta_grid = np.log(E_grid) - 0.5 * np.log(1 + Var_grid / E_grid**2)
+    std_log_space = np.sqrt(1 / pi_grid)
+    return E_grid, Var_grid, eta_grid, pi_grid, std_log_space
 
-# Plot 3: Std of log-normal prior
-plt.figure(figsize=(10, 6))
-cf3 = plt.contourf(E_grid, Var_grid, std_log_space, levels=100, cmap='inferno')
-legend_lines = []
-for level, color, ls in zip(valid_levels_std, colors, linestyles):
-    c = plt.contour(E_grid, Var_grid, std_log_space, levels=[level], colors=color, linestyles=ls, linewidths=2)
-    legend_lines.append(Line2D([0], [0], color=color, linestyle=ls, linewidth=2, label=f'$std_\Lambda$ = {level}'))
-plt.legend(handles=legend_lines, loc='upper left', fontsize=10)
-plt.colorbar(cf3, label='$Std[log(\Pi)]$ = sqrt(1/Π)')
-plt.title('Mapping from Precision Space to Std of Log-Normal Space')
-plt.xlabel('E[$\Pi$] (Expected Precision)')
-plt.ylabel('Var[$\Pi$] (Precision Variance)')
-plt.grid(True)
-plt.savefig('lambda_std.pdf', bbox_inches='tight', pad_inches=0)
 
-plt.tight_layout()
-plt.show()
+def save_precision_to_log_plots(output_dir="."):
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    E_grid, Var_grid, eta_grid, pi_grid, std_log_space = compute_precision_to_log_grid()
+
+    saved = [
+        _save_contour(
+            E_grid,
+            Var_grid,
+            eta_grid,
+            levels=[-4, -2, 0, 2, 4],
+            filename=output / "lambda_eta.pdf",
+            title=r"Mapping from Precision Space to $\eta_\Lambda$",
+            colorbar_label=r"$\eta_\Lambda$",
+            x_label=r"E[$\Pi$] (Expected Precision)",
+            y_label=r"Var[$\Pi$] (Precision Variance)",
+            legend_label=lambda level: rf"$\eta$ = {level}",
+            cmap="viridis",
+        ),
+        _save_contour(
+            E_grid,
+            Var_grid,
+            pi_grid,
+            levels=[0.1, 0.5, 1.0, 2.0, 5.0],
+            filename=output / "lambda_precision.pdf",
+            title=r"Mapping from Precision Space to $\Pi_\Lambda$",
+            colorbar_label=r"$\Pi_\Lambda$",
+            x_label=r"E[$\Pi$] (Expected Precision)",
+            y_label=r"Var[$\Pi$] (Precision Variance)",
+            legend_label=lambda level: rf"$\Pi_\Lambda$ = {level}",
+            cmap="plasma",
+        ),
+        _save_contour(
+            E_grid,
+            Var_grid,
+            std_log_space,
+            levels=[0.5, 1.0, 2.0, 4.0, 8.0],
+            filename=output / "lambda_std.pdf",
+            title=r"Mapping from Precision Space to Std of Log-Normal Space",
+            colorbar_label=r"Std[log($\Pi$)]",
+            x_label=r"E[$\Pi$] (Expected Precision)",
+            y_label=r"Var[$\Pi$] (Precision Variance)",
+            legend_label=lambda level: rf"$std_\Lambda$ = {level}",
+            cmap="inferno",
+        ),
+    ]
+    return saved
+
+
+def _save_contour(
+    x_grid,
+    y_grid,
+    z_grid,
+    *,
+    levels,
+    filename,
+    title,
+    colorbar_label,
+    x_label,
+    y_label,
+    legend_label,
+    cmap,
+):
+    colors = ["cyan", "lime", "yellow", "orange", "white"]
+    linestyles = ["-", "--", ":", "-.", "-"]
+    valid_levels = [level for level in levels if z_grid.min() <= level <= z_grid.max()]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    contour = ax.contourf(x_grid, y_grid, z_grid, levels=100, cmap=cmap)
+    legend_lines = []
+    for level, color, linestyle in zip(valid_levels, colors, linestyles):
+        ax.contour(x_grid, y_grid, z_grid, levels=[level], colors=color, linestyles=linestyle, linewidths=2)
+        legend_lines.append(Line2D([0], [0], color=color, linestyle=linestyle, linewidth=2, label=legend_label(level)))
+    if legend_lines:
+        ax.legend(handles=legend_lines, loc="upper left", fontsize=10)
+    fig.colorbar(contour, ax=ax, label=colorbar_label)
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(True)
+    fig.savefig(filename, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+    return filename
+
+
+if __name__ == "__main__":
+    save_precision_to_log_plots()

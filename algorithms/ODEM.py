@@ -1,15 +1,8 @@
 import sys
+from dataclasses import dataclass, field
+
 from tqdm import tqdm
 import numpy as np
-import matplotlib.pyplot as plt
-plt.rcParams.update({'font.size': 20,
-                    'lines.linewidth': 2,
-                     'xtick.labelsize' : 20,
-                     'ytick.labelsize' : 20})
-
-import matplotlib as mpl
-mpl.rc('lines', linewidth=3.0)
-
 import torch
 torch.set_default_dtype(torch.float64)
 torch.set_printoptions(precision=9)
@@ -23,6 +16,58 @@ from functions.prior_initialisation import prior_theta, prior_lambda
 
 from functions.noise_generation import add_noise
 from functions import pick_cov
+from odem.model_registry import resolve_process_build
+from odem.numerics import ensure_finite_tensor, safe_precision_inverse
+
+
+@dataclass
+class DemTrace:
+    vfe: list = field(default_factory=list)
+    accuracy: list = field(default_factory=list)
+    complexity: list = field(default_factory=list)
+    theta: list = field(default_factory=list)
+    lambda_x: list = field(default_factory=list)
+    lambda_y: list = field(default_factory=list)
+    cov_lambda_x: list = field(default_factory=list)
+    cov_lambda_y: list = field(default_factory=list)
+    cov_theta: list = field(default_factory=list)
+    gen_sensations: list = field(default_factory=list)
+    gen_predictions: list = field(default_factory=list)
+    gen_x_estimates: list = field(default_factory=list)
+
+    def append(
+        self,
+        *,
+        vfe,
+        accuracy,
+        complexity,
+        theta,
+        lambda_x,
+        lambda_y,
+        cov_lambda_x,
+        cov_lambda_y,
+        cov_theta,
+        gen_sensation,
+        gen_prediction,
+        gen_x_estimate,
+    ) -> None:
+        self.vfe.append(_detached(vfe))
+        self.accuracy.append(_detached(accuracy))
+        self.complexity.append(_detached(complexity))
+        self.theta.append(_detached(theta))
+        self.lambda_x.append(_detached(lambda_x))
+        self.lambda_y.append(_detached(lambda_y))
+        self.cov_lambda_x.append(_detached(cov_lambda_x))
+        self.cov_lambda_y.append(_detached(cov_lambda_y))
+        self.cov_theta.append(_detached(cov_theta))
+        self.gen_sensations.append(_detached(gen_sensation))
+        self.gen_predictions.append(_detached(gen_prediction))
+        self.gen_x_estimates.append(_detached(gen_x_estimate))
+
+
+def _detached(value):
+    return value.detach().clone() if hasattr(value, "detach") else value
+
 
 def start(kx, ky, f, g, f_name, gp_name,
             dt, T,
@@ -38,14 +83,14 @@ def start(kx, ky, f, g, f_name, gp_name,
     # Load the selected generative process, determined by gp_name. In this script, we only have Lotka-Volterra as the GP.
     # GP is now a .py function that contains the Ordinaty Differential Equations (ODEs) describing the GP.
 
-    GP = __import__('.'.join(['functions.generative_process', gp_name.split('/')[0]]), fromlist=['object'])
+    gp_build = resolve_process_build(gp_name)
     # Solve the ODEs in GP by integrating them over a time span T and with step size dt.
     # x now holds the true external states of the world (i.e., true trajectories of the world)
 
     x_noise, y_noise = noise['x'], noise['y']
 
     # We won't need to pass gp_mode anymore since either lotka or lorenz is selected.
-    x, x_clean, x_white_noise, x_sigma_schedule, x_colored_noise, x_context_lengths = GP.build(dt, T, x_noise)
+    x, x_clean, x_white_noise, x_sigma_schedule, x_colored_noise, x_context_lengths = gp_build(dt, T, x_noise)
 
     if gp_name == 'lotka' or gp_name == 'glv':
         y_noise_min_cap = 0
@@ -102,14 +147,10 @@ def start(kx, ky, f, g, f_name, gp_name,
     q_lambda_y_cov = pick_cov.pick(q_lambda_y_cov, None, dim=q_lambda_y_mu.numel(), device=q_lambda_y_mu.device,
                               dtype=q_lambda_y_mu.dtype)
 
-    ####################################### Initialise all place holders ############################################
-    # Initialise free action as 0
-    free_action = 0
-    # These will hold the values of VFE, accuracy and complexity at every time step
-    VFE, ACCURACY, COMPLEXITY = [], [], []
-    # These will hold, the estimates for x, the actual sensations, and predicted sensations, respectively, for plotting purposes.
-    gen_x_estimates, gen_sensations, gen_predictions = [], [], []
-    # Place-holders for the posterior covariance for lambda_y and lambda_x
+    ####################################### Initialise trace storage ###############################################
+    free_action = torch.zeros((), dtype=q_x_mu.dtype, device=q_x_mu.device)
+    trace = DemTrace()
+    # Posterior covariance traces for lambda_y and lambda_x.
     COV_LAMBDA_Y, COV_LAMBDA_X = [q_lambda_y_cov], [q_lambda_x_cov]
     COV_THETA = [q_theta_cov]
     # Store these for the visualisation of their evolution
@@ -211,7 +252,8 @@ def start(kx, ky, f, g, f_name, gp_name,
             p_lambda_y_eta = q_lambda_y_mu.detach().clone()
             ######################################### Update prior precisions ########################################
             if carry_cov:
-                p_lambda_x_pi, p_lambda_y_pi = torch.inverse(q_lambda_x_cov.detach().clone()), torch.inverse(q_lambda_y_cov.detach().clone())
+                p_lambda_x_pi = safe_precision_inverse(q_lambda_x_cov, previous_precision=p_lambda_x_pi, phase="M-step lambda_x", timestep=i)
+                p_lambda_y_pi = safe_precision_inverse(q_lambda_y_cov, previous_precision=p_lambda_y_pi, phase="M-step lambda_y", timestep=i)
             ################################## E step  ###############################################################
             theta_lr = compute_robins_monroe.compute(theta_eta_rate, em_index, theta_eta_t_0,
                                                      theta_eta_gamma) if theta_eta_adapt else theta_eta_rate
@@ -241,7 +283,7 @@ def start(kx, ky, f, g, f_name, gp_name,
             p_theta_eta = q_theta_mu.detach().clone()
             ######################################### Update prior precisions ########################################
             if carry_cov:
-                p_theta_pi = torch.inverse(q_theta_cov.detach().clone())
+                p_theta_pi = safe_precision_inverse(q_theta_cov, previous_precision=p_theta_pi, phase="E-step theta", timestep=i)
             ######################################### Reset accumulators #############################################
             acc_grad_theta = torch.zeros_like(q_theta_mu, device=q_theta_mu.device, dtype=q_theta_mu.dtype)
             acc_grad_lambda_y = torch.zeros_like(q_lambda_y_mu, device=q_lambda_y_mu.device, dtype=q_lambda_y_mu.dtype)
@@ -256,30 +298,39 @@ def start(kx, ky, f, g, f_name, gp_name,
                                   p_lambda_x_pi, q_lambda_x_cov,
                                   p_lambda_y_pi, q_lambda_y_cov, device)
         vfe_validity.check(vfe, step_info=f"Final vfe calculation t={i}")
+        ensure_finite_tensor(vfe, name="vfe", phase="final VFE", timestep=i)
+        ensure_finite_tensor(accuracy, name="accuracy", phase="final VFE", timestep=i)
+        ensure_finite_tensor(complexity, name="complexity", phase="final VFE", timestep=i)
 
         # Accumulate vfe into free action
         free_action += vfe
+        ensure_finite_tensor(free_action, name="free_action", phase="accumulation", timestep=i)
 
-        if i % 10 == 0:
+        if i % 10 == 0 and not tqdm_disable:
             print('\nFree Action=%.2f, VFE: %.2f' % (free_action.detach(), vfe.detach()))
 
-        # Store the estimates and vfe
-        VFE.append(vfe)
-        ACCURACY.append(accuracy)
-        COMPLEXITY.append(complexity)
-        THETA.append(q_theta_mu)
-        LAMBDA_X.append(q_lambda_x_mu)
-        LAMBDA_Y.append(q_lambda_y_mu)
-        gen_sensations.append(gen_y.data)
-        gen_predictions.append(gen_y_hat.data)
-        gen_x_estimates.append(q_x_mu.data)
-        COV_LAMBDA_X.append(q_lambda_x_cov)
-        COV_LAMBDA_Y.append(q_lambda_y_cov)
-        COV_THETA.append(q_theta_cov)
+        ensure_finite_tensor(q_lambda_x_cov, name="q_lambda_x_cov", phase="trace", timestep=i)
+        ensure_finite_tensor(q_lambda_y_cov, name="q_lambda_y_cov", phase="trace", timestep=i)
+        ensure_finite_tensor(q_theta_cov, name="q_theta_cov", phase="trace", timestep=i)
+        trace.append(
+            vfe=vfe,
+            accuracy=accuracy,
+            complexity=complexity,
+            theta=q_theta_mu,
+            lambda_x=q_lambda_x_mu,
+            lambda_y=q_lambda_y_mu,
+            cov_lambda_x=q_lambda_x_cov,
+            cov_lambda_y=q_lambda_y_cov,
+            cov_theta=q_theta_cov,
+            gen_sensation=gen_y,
+            gen_prediction=gen_y_hat,
+            gen_x_estimate=q_x_mu,
+        )
 
     tensor_lists = [
-        VFE, ACCURACY, COMPLEXITY, THETA, LAMBDA_X, LAMBDA_Y, COV_LAMBDA_X, COV_LAMBDA_Y, COV_THETA,
-        gen_sensations, gen_x_estimates, gen_predictions,
+        trace.vfe, trace.accuracy, trace.complexity, trace.theta, trace.lambda_x, trace.lambda_y,
+        trace.cov_lambda_x, trace.cov_lambda_y, trace.cov_theta,
+        trace.gen_sensations, trace.gen_x_estimates, trace.gen_predictions,
         x, y
     ]
 
